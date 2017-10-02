@@ -1,88 +1,132 @@
 # coding: utf-8
-#from __future__ import unicode_literals
+from __future__ import unicode_literals
 import vcr
 import hashlib
 import base64
 import sys
 import collections,urllib2, xml.etree.ElementTree as ET
 
-MODEM_IP = '***REMOVED***.252'
-API_PATH = '/api/'
-PREV_API = ''
 SALTED_PASSWD = u'***REMOVED***'
-PREV_OBJ = None
-COOKIE = None
-TOKEN = None
 
-# retrieve xml and if successful return root
-def get_xml_root(api_call, header_context={}, data=None):
+class ClientMetaData(dict):
+    COOKIE_LABEL = "Cookie"
+    SESSION_ID_LABEL = "SessionID_R3="
+    VERIF_TOKEN_LABEL = "__RequestVerificationToken"
+    
+    def setSessionCookie(self, sessionId):
+        if sessionId.startswith(ClientMetaData.SESSION_ID_LABEL):
+            self[ClientMetaData.COOKIE_LABEL]=sessionId
+        else:
+            self[ClientMetaData.COOKIE_LABEL]=ClientMetaData.SESSION_ID_LABEL+sessionId
+
+    def clearSessionCookie(self):
+        if ClientMetaData.COOKIE_LABEL in self:
+            self.pop(ClientMetaData.COOKIE_LABEL)
+
+    def refreshSessionCookieIfNeeded(self, urllib2Info):
+       new_cookie=urllib2Info.getheader("Set-"+ClientMetaData.COOKIE_LABEL)
+       if new_cookie:
+           self.setSessionCookie(new_cookie)
+
+    def refreshVerificationTokenIfNeeded(self, urllib2Info):
+        new_token=urllib2Info.getheader(ClientMetaData.VERIF_TOKEN_LABEL)
+        if new_token:
+            self.setVerificationToken(new_token)
+
+    
+    def getVerificationToken(self):
+        return self[ClientMetaData.VERIF_TOKEN_LABEL]
+
+    def setVerificationToken(self,verifToken):
+        self[ClientMetaData.VERIF_TOKEN_LABEL] = verifToken
+
+    def hasVerificationToken(self):
+        return ClientMetaData.VERIF_TOKEN_LABEL in self
+    
+    def clearVerificationToken(self):
+        if ClientMetaData.VERIF_TOKEN_LABEL in self:
+            self.pop(ClientMetaData.VERIF_TOKEN_LABEL)
+
+
+class NotLoggedException(Exception):
+    '''Exception to be thrown when action requires auth but client has not log on'''
+
+class Client:
+
+    def __init__(self,modem_ip):
+        self.MODEM_IP = modem_ip
+        self.API_PATH = '/api/'
+        self.PREV_API = None
+        self.PREV_OBJ = None
+        self.metadata = ClientMetaData()
+         
+    # retrieve xml and if successful return root
+    def sendReceive(self,api_call, data=None):
         # check previous call to avoid making multiple identical GET requests
-        global PREV_API
-        global PREV_OBJ
-        if api_call == PREV_API:
-                return PREV_OBJ
+        if api_call == self.PREV_API:
+                return self.PREV_OBJ
         try:
-                if  data and not '__RequestVerificationToken' in header_context:
-                    header_context = refresh_token(header_context)
-                req = urllib2.Request(url='http://'+MODEM_IP+API_PATH+api_call, headers=header_context)
+                if data and not self.metadata.hasVerificationToken():
+                    self.refreshToken()
+                req = urllib2.Request(url='http://'+self.MODEM_IP+self.API_PATH+api_call, headers=self.metadata)
                 xmlobj = urllib2.urlopen(req,data)
         except:
                 print('[!] Error while making GET request for', api_call)
                 exit(1)
-        new_cookie=xmlobj.info().getheader("Set-Cookie")
-        if (new_cookie):
-            header_context["Cookie"] = new_cookie
-            print('New cookie has been set')
-        new_token=xmlobj.info().getheader('__RequestVerificationToken')
-        if (new_token):
-            header_context['__RequestVerificationToken']=new_token
+        
+        self.metadata.refreshVerificationTokenIfNeeded(xmlobj.info())
+        self.metadata.refreshSessionCookieIfNeeded(xmlobj.info())
         # save current API call and XML obj
-        PREV_API = api_call
-        PREV_OBJ = ET.parse(xmlobj).getroot()
-        return collections.namedtuple('response','xmlroot,headers')(PREV_OBJ,header_context)
+        self.PREV_API = api_call
+        self.PREV_OBJ = ET.parse(xmlobj).getroot()
+        xmlobj.close()
+        return self.PREV_OBJ
 
-# return value in specified xml tag
-def get_value(root, tag):
-        value = root.find(tag)
-        if value is not None:
-                return value.text
 
-def getToken():
-        header_context = {}
-        resp = get_xml_root("webserver/SesTokInfo")
-        print resp.xmlroot
-        header_context["Cookie"] = "SessionID_R3="+get_value(resp.xmlroot,"SesInfo")
-        header_context["__RequestVerificationToken"] = get_value(resp.xmlroot,"TokInfo")
-        return header_context
+    def getToken(self):
+        self.headers = {}
+        resp = self.sendReceive("webserver/SesTokInfo")
+        print resp
+        self.metadata.setSessionCookie(resp.find("SesInfo").text)
+        self.metadata.setVerificationToken(resp.find("TokInfo").text)
 #api/webserver/SesTokInfo
 
-def refresh_token(header_context):
-        if "__RequestVerificationToken" in header_context:
-            header_context.pop("__RequestVerificationToken")
-        resp = get_xml_root("webserver/token",header_context)
-        token = get_value(resp.xmlroot,'token')
-        resp.headers["__RequestVerificationToken"] = token[32:]
-        return resp.headers
+    def refreshToken(self):
+        self.metadata.clearVerificationToken()
+        resp = self.sendReceive("webserver/token")
+        token = resp.find('token').text
+        self.metadata.setVerificationToken(token[32:])
+
+
+    def login(self):
+        user = 'admin'
+        global SALTED_PASSWD
+        
+        req = ET.Element('request')
+        ET.SubElement(req,'Username').text = user
+        ET.SubElement(req,'password_type').text = '4'
+        ET.SubElement(req,'Password').text=base64.b64encode(hashlib.sha256(user+SALTED_PASSWD+self.metadata.getVerificationToken()).hexdigest())
+        
+        root = self.sendReceive('user/login',ET.tostring(req,encoding='UTF-8', method='xml'))
+        self.metadata.clearVerificationToken()
+        return self.isLogged()
+
+    def isLogged(self):
+       root = self.sendReceive('user/state-login')
+       return int(root.find('State').text)==0
+
 
 # return data plan usage percentage
-def get_usage(header_context={}):
-        # modem will not allow API calls if someone is logged in
-        root = get_xml_root('user/state-login',header_context)
-        state = int(get_value(root.xmlroot,'State'))
-        user = get_value(root.xmlroot, 'Username')
-        # if state is -1 and username is not empty we cannot make the API call
-        if (state == -1) and (user is not None):
-                print('[!] Cannot make API calls: %s is logged in' % user)
-                exit(1)
+def get_usage(client):
 
         # retrieve download and upload traffic and convert them to MB
-        root = get_xml_root('monitoring/month_statistics',header_context).xmlroot
-        month_download = int(int(get_value(root, 'CurrentMonthDownload'))/1048576)
-        month_upload = int(int(get_value(root, 'CurrentMonthUpload'))/1048576)
+        root = client.sendReceive('monitoring/month_statistics')
+        month_download = int(int(root.find('CurrentMonthDownload').text)/1048576)
+        month_upload = int(int(root.find('CurrentMonthUpload').text)/1048576)
 
         # retrieve data plan limit and convert to MB
-        root = get_xml_root('monitoring/start_date',header_context).xmlroot
-        data_limit = get_value(root, 'DataLimit')
+        root = client.sendReceive('monitoring/start_date')
+        data_limit = root.find('DataLimit').text
 
         # convert DataLimit suffix GB to MB
         if data_limit[2:] == 'GB':
@@ -93,59 +137,33 @@ def get_usage(header_context={}):
         # return percentage
         return int(round((float(month_upload + month_download) / data_limit) * 100))
 
-
-
-
-def login(header_context):
-    user = 'admin'
-    global SALTED_PASSWD
-    req = ET.Element('request')
-    ET.SubElement(req,'Username').text = user
-    ET.SubElement(req,'password_type').text = '4'
-    ET.SubElement(req,'Password').text=base64.b64encode(hashlib.sha256(user+SALTED_PASSWD+header_context['__RequestVerificationToken']).hexdigest())
-    root = get_xml_root('user/login',header_context,ET.tostring(req,encoding='UTF-8', method='xml'))
-    root.headers.pop('__RequestVerificationToken')
-    return root.headers
-
-def is_logged(header_context):
-     root = get_xml_root('user/state-login',header_context)
-     return int(root.xmlroot.find('State').text)==0
         
-def send_sms(tel, text, header_context):
-    req = ET.Element('request')
-    ET.SubElement(req,'Index').text = '-1'
-    phones=ET.SubElement(req,'Phones')
-    ET.SubElement(phones,'Phone').text=tel
-    ET.SubElement(req,'Content').text = text
-    ET.SubElement(req,'Length').text = str(len(text))
-    ET.SubElement(req,'Reserved').text = "1"
-    ET.SubElement(req,'Date').text = "2017-10-01 23:01:30"
-    root = get_xml_root('sms/send-sms',header_context,ET.tostring(req, encoding="UTF-8", method="xml"))
-    return None    
+def send_sms(client, tels, text):
+    if client.isLogged(): 
+        req = ET.Element('request')
+        ET.SubElement(req,'Index').text = '-1'
+        phones=ET.SubElement(req,'Phones')
+        for tel in tels:
+            ET.SubElement(phones,'Phone').text=tel
+        ET.SubElement(req,'Content').text = text
+        ET.SubElement(req,'Length').text = str(len(text))
+        ET.SubElement(req,'Reserved').text = "1"
+        ET.SubElement(req,'Date').text = "2017-10-01 23:01:30"
+        root = client.sendReceive('sms/send-sms',ET.tostring(req, encoding="UTF-8", method="xml"))
+    else:
+        raise NotLoggedException('Need to be logged to send SMS')
 
 
 # return signal strength percentage
-def get_signal(header_context = {}):
-        root = get_xml_root('monitoring/status',header_context).xmlroot
-        return int(get_value(root, 'SignalIcon'))
-
-# return battery percentage
-def get_battery(header_context = {}):
-        root = get_xml_root('monitoring/status',header_context)
-        return int(get_value(root, 'BatteryPercent'))
-
-# return number of current wifi users
-def get_wifi_users():
-        root = get_xml_root('monitoring/status',header_context)
-        return int(get_value(root, 'CurrentWifiUser'))
+def get_signal(client):
+        root = client.sendReceive('monitoring/status')
+        return int(root.find('SignalIcon').text)
 
 with vcr.use_cassette('fixtures/vcr_cassettes/huawei.yaml'):
-    headers = getToken()
-    print headers
-    headers = refresh_token(headers)
-    headers = login(headers)
-    print is_logged(headers)
-    send_sms("***REMOVED***","I m so happy to see you !", headers)
-    print is_logged(headers)
-    print('DATA PLAN USAGE: {}%'.format(get_signal(headers)))
+    huawei_client = Client("***REMOVED***.252")
+    huawei_client.getToken()
+    huawei_client.login()
+    print  huawei_client.isLogged()
+    send_sms(huawei_client,["***REMOVED***","***REMOVED***"],"Il y a {} barres de signal et nous avons consomme {}/100 du forfait !".format(get_signal(huawei_client),get_usage(huawei_client)))
+    print('DATA PLAN USAGE: {}%'.format(get_signal(huawei_client)))
 
