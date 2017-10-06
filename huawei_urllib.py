@@ -169,11 +169,11 @@ def get_signal(client):
         root = client.sendReceive('monitoring/status')
         return int(root.find('SignalIcon').text)
 
-huawei_client = Client("***REMOVED***.252")
-huawei_client.getToken()
-print(huawei_client.login())
-print(huawei_client.isLogged())
-print(is_data_enabled(huawei_client))
-enable_data(huawei_client,True)
+#huawei_client = Client("***REMOVED***.252")
+#huawei_client.getToken()
+#print(huawei_client.login())
+#print(huawei_client.isLogged())
+#print(is_data_enabled(huawei_client))
+#enable_data(huawei_client,True)
 #send_sms(huawei_client,["***REMOVED***"],"Il y a {} barres de signal et nous avons consomme {}/100 du forfait !".format(get_signal(huawei_client),get_usage(huawei_client)))
 
