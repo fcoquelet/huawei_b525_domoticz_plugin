@@ -1,7 +1,8 @@
 """
-<plugin key="HuaweiModemLte" name="Huawei B525 LTE modem plugin" author="FlorentC" version="0.0.1">
+<plugin key="HuaweiModemLte" name="Huawei B525 LTE modem" author="***REMOVED***" version="0.0.1">
 <params>
     <param field="Address" label="IP Address" required="true" default="192.168.8.1" />
+	<param field="Mode1" label="Polling interval" default="10" width="40px" required="true" />
     <param field="Password" label="Password" required="true" />
 </params>
 </plugin>
@@ -9,24 +10,29 @@
 import Domoticz
 import base64
 import hashlib
+import time
 import huawei_urllib
 
-class BasePlugin:
-    
+class HuaweiPlugin:
+    DATA_SWITCH = 1
+    DATA_PLAN_CONSUMPTION = 2
+
     def __init__(self):
         self.saltedPassword = None
+        self.nextUpdate = None
         return
 
     def onStart(self):
         Domoticz.Log("onStart called")
 
         if len(Devices)==0:
-            Domoticz.Device(Name="Data Switch",Unit=1,TypeName="Switch").Create()
-            Domoticz.Device(Name="Data Plan consumption",Unit=2,TypeName="Percentage").Create()
+            Domoticz.Device(Name="Data Switch",Unit=HuaweiPlugin.DATA_SWITCH,TypeName="Switch").Create()
+            Domoticz.Device(Name="Data Plan consumption",Unit=HuaweiPlugin.DATA_PLAN_CONSUMPTION,TypeName="Percentage").Create()
         Domoticz.Log("Calculating salted Password")
         self.saltedPassword = base64.b64encode(hashlib.sha256(Parameters["Password"].encode('utf-8')).hexdigest().encode('utf-8')).decode()
-        Domoticz.Log(self.saltedPassword)
-
+        self.nextUpdate = time.time()
+        self.client = huawei_urllib.Client(Parameters["Address"])
+        self.refresh()
 
 
     def onStop(self):
@@ -39,7 +45,18 @@ class BasePlugin:
         Domoticz.Log("onMessage called")
 
     def onCommand(self, Unit, Command, Level, Hue):
-        Domoticz.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
+        #Domoticz.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
+        if Unit == HuaweiPlugin.DATA_SWITCH:
+            if not self.client.isLogged():
+                self.client.getToken()
+                self.client.login(self.saltedPassword)
+            try:
+                enable=(Command=="On")
+                if huawei_urllib.enable_data(self.client,enable):
+                    self.updateDataSwitch(enable)
+            except HuaweiPlugin.NotLoggedException:
+                Domoticz.error("Unable to log on")
+        
 
     def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
         Domoticz.Log("Notification: " + Name + "," + Subject + "," + Text + "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile)
@@ -48,10 +65,32 @@ class BasePlugin:
         Domoticz.Log("onDisconnect called")
 
     def onHeartbeat(self):
-        Domoticz.Log("onHeartbeat called")
+        currentTime = time.time()
+        if self.nextUpdate < currentTime:
+            #Compute next running time
+            self.nextUpdate = int(currentTime) + int(Parameters["Mode1"])
+            self.refresh()
+	
+    def refresh(self):
+        if self.client.isLogged() or self.client.getToken():
+            self.updateDataSwitch(huawei_urllib.is_data_enabled(self.client))
+            percent = huawei_urllib.get_usage(self.client)
+            Domoticz.Log(str(percent))
+            Devices[HuaweiPlugin.DATA_PLAN_CONSUMPTION].Update(percent,str(percent))
+        else:
+            Domoticz.Error("Unable to reach the Huawei Modem ({})".format(Parameters["Address"]))
+            
+    def updateDataSwitch(self, enabled):
+        if enabled:
+            Domoticz.Log("On")
+            Devices[HuaweiPlugin.DATA_SWITCH].Update(1,"On")
+        else:
+            Domoticz.Log("Off")
+            Devices[HuaweiPlugin.DATA_SWITCH].Update(0,"Off")
+			
 
 global _plugin
-_plugin = BasePlugin()
+_plugin = HuaweiPlugin()
 
 def onStart():
     global _plugin
@@ -83,7 +122,7 @@ def onDisconnect(Connection):
 
 def onHeartbeat():
     global _plugin
-    #_plugin.onHeartbeat()
+    _plugin.onHeartbeat()
 
     # Generic helper functions
 def DumpConfigToLog():

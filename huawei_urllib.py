@@ -18,6 +18,12 @@ class ClientMetaData(dict):
         else:
             self[ClientMetaData.COOKIE_LABEL]=ClientMetaData.SESSION_ID_LABEL+sessionId
 
+    def getSessionCookie(self):
+        if ClientMetaData.COOKIE_LABEL in self:
+            return self[ClientMetaData.COOKIE_LABEL]
+        else:
+           return None
+           
     def clearSessionCookie(self):
         if ClientMetaData.COOKIE_LABEL in self:
             self.pop(ClientMetaData.COOKIE_LABEL)
@@ -50,6 +56,9 @@ class ClientMetaData(dict):
 class NotLoggedException(Exception):
     '''Exception to be thrown when action requires auth but client has not log on'''
 
+class ConnectionException(Exception):
+    '''Exception to be thrown when action requires auth but client has not log on'''
+
 class Client:
 
     def __init__(self,modem_ip):
@@ -71,7 +80,7 @@ class Client:
                 xmlobj = request.urlopen(req,data)
         except:
                 print('[!] Error while making GET request for', api_call)
-                exit(1)
+                raise ConnectionException("Error trying to reach "+ self.MODEM_IP)
         
         self.metadata.refreshVerificationTokenIfNeeded(xmlobj.info())
         self.metadata.refreshSessionCookieIfNeeded(xmlobj.info())
@@ -81,12 +90,15 @@ class Client:
         xmlobj.close()
         return self.PREV_OBJ
 
-
+    def hasToken(self):     
+        return self.metadata.getSessionCookie() != None
+        
     def getToken(self):
         self.headers = {}
         resp = self.sendReceive("webserver/SesTokInfo")
         self.metadata.setSessionCookie(resp.find("SesInfo").text)
         self.metadata.setVerificationToken(resp.find("TokInfo").text)
+        return True
 #api/webserver/SesTokInfo
 
     def refreshToken(self):
@@ -96,14 +108,13 @@ class Client:
         self.metadata.setVerificationToken(token[32:])
 
 
-    def login(self):
+    def login(self,saltedPassword):
         user = 'admin'
-        global SALTED_PASSWD
         
         req = ET.Element('request')
         ET.SubElement(req,'Username').text = user
         ET.SubElement(req,'password_type').text = '4'
-        ET.SubElement(req,'Password').text=base64.b64encode(hashlib.sha256((user+SALTED_PASSWD+self.metadata.getVerificationToken()).encode('utf-8')).hexdigest().encode('utf-8')).decode()
+        ET.SubElement(req,'Password').text=base64.b64encode(hashlib.sha256((user+saltedPassword+self.metadata.getVerificationToken()).encode('utf-8')).hexdigest().encode('utf-8')).decode()
         
         root = self.sendReceive('user/login',ET.tostring(req,encoding='UTF-8', method='xml'))
         self.metadata.clearVerificationToken()
