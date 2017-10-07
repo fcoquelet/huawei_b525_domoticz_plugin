@@ -16,6 +16,8 @@ import huawei_urllib
 class HuaweiPlugin:
     DATA_SWITCH = 1
     DATA_PLAN_CONSUMPTION = 2
+    DATA_DOWNLOAD = 3
+    DATA_UPLOAD = 4
 
     def __init__(self):
         self.saltedPassword = None
@@ -25,9 +27,11 @@ class HuaweiPlugin:
     def onStart(self):
         Domoticz.Log("onStart called")
 
-        if len(Devices)==0:
+        if len(Devices) < HuaweiPlugin.DATA_UPLOAD:
             Domoticz.Device(Name="Data Switch",Unit=HuaweiPlugin.DATA_SWITCH,TypeName="Switch").Create()
             Domoticz.Device(Name="Data Plan consumption",Unit=HuaweiPlugin.DATA_PLAN_CONSUMPTION,TypeName="Percentage").Create()
+            Domoticz.Device(Name="Data Download",Unit=HuaweiPlugin.DATA_DOWNLOAD,TypeName="Custom", Options = { "Custom": "1;MB"} ).Create()
+            Domoticz.Device(Name="Data Upload",Unit=HuaweiPlugin.DATA_UPLOAD,TypeName="Custom", Options = { "Custom": "1;MB"}).Create()
         Domoticz.Log("Calculating salted Password")
         self.saltedPassword = base64.b64encode(hashlib.sha256(Parameters["Password"].encode('utf-8')).hexdigest().encode('utf-8')).decode()
         self.nextUpdate = time.time()
@@ -74,9 +78,10 @@ class HuaweiPlugin:
     def refresh(self):
         if self.client.isLogged() or self.client.getToken():
             self.updateDataSwitch(huawei_urllib.is_data_enabled(self.client))
-            percent = huawei_urllib.get_usage(self.client)
-            Domoticz.Log(str(percent))
-            Devices[HuaweiPlugin.DATA_PLAN_CONSUMPTION].Update(percent,str(percent))
+            usage = huawei_urllib.get_usage(self.client)
+            Devices[HuaweiPlugin.DATA_UPLOAD].Update(usage.upload,str(usage.upload))
+            Devices[HuaweiPlugin.DATA_DOWNLOAD].Update(usage.download,str(usage.download))
+            Devices[HuaweiPlugin.DATA_PLAN_CONSUMPTION].Update(usage.consumption,str(usage.consumption))
         else:
             Domoticz.Error("Unable to reach the Huawei Modem ({})".format(Parameters["Address"]))
             

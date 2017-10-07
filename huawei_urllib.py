@@ -131,21 +131,21 @@ def get_usage(client):
 
         # retrieve download and upload traffic and convert them to MB
         root = client.sendReceive('monitoring/month_statistics')
-        month_download = int(int(root.find('CurrentMonthDownload').text)/1048576)
-        month_upload = int(int(root.find('CurrentMonthUpload').text)/1048576)
+        month_download = int(root.find('CurrentMonthDownload').text)/1048576
+        month_upload = int(root.find('CurrentMonthUpload').text)/1048576
 
         # retrieve data plan limit and convert to MB
         root = client.sendReceive('monitoring/start_date')
         data_limit = root.find('DataLimit').text
 
         # convert DataLimit suffix GB to MB
-        if data_limit[2:] == 'GB':
+        if data_limit.endswith('GB'):
                 data_limit = int(data_limit[:-2])*1024
         else:
                 data_limit = int(data_limit[:-2])
 
         # return percentage
-        return int(round((float(month_upload + month_download) / data_limit) * 100))
+        return collections.namedtuple('usage',['download','upload','consumption'])(int(month_download),int(month_upload),int(round(((month_upload + month_download) / data_limit) * 100)))
 
         
 def send_sms(client, tels, text):
