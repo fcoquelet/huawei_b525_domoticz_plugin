@@ -1,5 +1,5 @@
 """
-<plugin key="HuaweiModemLte" name="Huawei B525 LTE modem" author="***REMOVED***" version="0.0.1">
+<plugin key="HuaweiModemLte" name="Huawei B525 LTE modem" author="fcoquelet" version="0.0.1">
 <params>
     <param field="Address" label="IP Address" required="true" default="192.168.8.1" />
 	<param field="Mode1" label="Polling interval" default="10" width="40px" required="true" />
@@ -34,8 +34,9 @@ class HuaweiPlugin:
             Domoticz.Device(Name="Data Upload",Unit=HuaweiPlugin.DATA_UPLOAD,TypeName="Custom", Options = { "Custom": "1;MB"}).Create()
         Domoticz.Log("Calculating salted Password")
         self.saltedPassword = base64.b64encode(hashlib.sha256(Parameters["Password"].encode('utf-8')).hexdigest().encode('utf-8')).decode()
+        Domoticz.Log(self.saltedPassword)
         self.nextUpdate = time.time()
-        self.client = huawei_urllib.Client(Parameters["Address"])
+        self.client = huawei_urllib.Client(Parameters["Address"],no_ssl=True)
         self.refresh()
 
 
@@ -49,11 +50,13 @@ class HuaweiPlugin:
         Domoticz.Log("onMessage called")
 
     def onCommand(self, Unit, Command, Level, Hue):
-        #Domoticz.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
+        Domoticz.Log("onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
         if Unit == HuaweiPlugin.DATA_SWITCH:
             if not self.client.isLogged():
                 self.client.getToken()
+                Domoticz.Log("Trying to log on")
                 self.client.login(self.saltedPassword)
+                Domoticz.Log(str(self.client.isLogged()))
             try:
                 enable=(Command=="On")
                 if huawei_urllib.enable_data(self.client,enable):

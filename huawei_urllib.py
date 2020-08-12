@@ -3,13 +3,12 @@
 import hashlib
 import base64
 import sys
-import collections,urllib.request as request, xml.etree.ElementTree as ET
+import collections,urllib.request as request, ssl, xml.etree.ElementTree as ET
 
-SALTED_PASSWD = '***REMOVED***'
 
 class ClientMetaData(dict):
     COOKIE_LABEL = "Cookie"
-    SESSION_ID_LABEL = "SessionID_R3="
+    SESSION_ID_LABEL = "SessionID="
     VERIF_TOKEN_LABEL = "__RequestVerificationToken"
     
     def setSessionCookie(self, sessionId):
@@ -61,15 +60,19 @@ class ConnectionException(Exception):
 
 class Client:
 
-    def __init__(self,modem_ip):
+    def __init__(self,modem_ip, no_ssl=True):
         self.MODEM_IP = modem_ip
         self.API_PATH = '/api/'
         self.PREV_API = None
         self.PREV_OBJ = None
+        if no_ssl:
+                ssl._create_default_https_context = ssl._create_unverified_context 
         self.metadata = ClientMetaData()
          
     # retrieve xml and if successful return root
     def sendReceive(self,api_call, data=None):
+       
+        #ssl._create_default_https_context = ssl._create_unverified_context
         # check previous call to avoid making multiple identical GET requests
         if api_call == self.PREV_API:
                 return self.PREV_OBJ
@@ -179,12 +182,4 @@ def enable_data(client,enable=True):
 def get_signal(client):
         root = client.sendReceive('monitoring/status')
         return int(root.find('SignalIcon').text)
-
-#huawei_client = Client("***REMOVED***.252")
-#huawei_client.getToken()
-#print(huawei_client.login())
-#print(huawei_client.isLogged())
-#print(is_data_enabled(huawei_client))
-#enable_data(huawei_client,True)
-#send_sms(huawei_client,["***REMOVED***"],"Il y a {} barres de signal et nous avons consomme {}/100 du forfait !".format(get_signal(huawei_client),get_usage(huawei_client)))
 
